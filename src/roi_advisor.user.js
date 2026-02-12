@@ -1,18 +1,21 @@
 // ==UserScript==
-// @name         OGame ROI Advisor
-// @namespace    http://tampermonkey.net/
-// @version      2.0
-// @description  Adds a button to OGame to calculate ROI for Mines and Lifeforms, displaying data in a 4-tab modal.
-// @author       Patrik Wagner
-// @match        https://*.ogame.gameforge.com/game/*
+// @name        OG_Optimine
+// @namespace    https://github.com/patrik-alexander-wagner/OGprofitability
+// @version      1.0.0
+// @description  ROI recommendations for buildings/tech/LF
+// @author       Bel'Veste
+// @match        https://*.ogame.gameforge.com/*
 // @grant        none
+// @updateURL    https://raw.githubusercontent.com/patrik-alexander-wagner/OGprofitability/main/src/roi_advisor.user.js
+// @downloadURL  https://raw.githubusercontent.com/patrik-alexander-wagner/OGprofitability/main/src/roi_advisor.user.js
+// @homepageURL  https://github.com/patrik-alexander-wagner/OGprofitability
 // ==/UserScript==
 
 (function () {
     'use strict';
 
     // --- Constants & Config ---
-    const SCRIPT_ID = 'ogame_roi_advisor';
+    const SCRIPT_ID = 'ogame_optimine';
     const TEAMS = {
         HUMAN: 1,
         ROCKTAL: 2,
@@ -20,23 +23,135 @@
         KAELESH: 4
     };
 
-    // LF Tech mapping: position -> tech details (race, name, ID)
-    const LF_TECH_MAP = {
-        13201: { race: 'Mechas', name: 'Catalyzer Technology', position: 1 },
-        12212: { race: 'Human', name: 'High-Performance Extractors', position: 2 },  // Note: position 2
-        14202: { race: 'Kaelesh', name: 'Sulfide Process', position: 2 },
-        12202: { race: "Rock'tal", name: 'Acoustic Scanning', position: 2 },
-        12203: { race: "Rock'tal", name: 'High Energy Pump Systems', position: 3 },
-        12205: { race: "Rock'tal", name: 'Magma-Powered Production', position: 5 },
-        13206: { race: 'Mechas', name: 'Automated Transport Lines', position: 6 },
-        12207: { race: "Rock'tal", name: 'Depth Sounding', position: 7 },
-        11208: { race: 'Human', name: 'Enhanced Production Technologies', position: 8 },
-        12210: { race: "Rock'tal", name: 'Hardened Diamond Drill Heads', position: 10 },
-        12211: { race: "Rock'tal", name: 'Seismic Mining Technology', position: 11 },
-        // 12212 at position 12 is different from position 2
-        14212: { race: 'Kaelesh', name: 'Psychoharmoniser', position: 12 },
-        13213: { race: 'Mechas', name: 'Artificial Swarm Intelligence', position: 13 }
+    const LF_RACES = {
+        1: 'Humans',
+        2: 'Rock’tal',
+        3: 'Mechas',
+        4: 'Kaelesh'
     };
+
+    function getPlayerClass() {
+        const sprite = document.querySelector("#characterclass .sprite");
+        if (!sprite) {
+            const metaId = document.querySelector('meta[name="ogame-character-class"]')?.getAttribute('content');
+            const mapped = { '1': 'collector', '2': 'general', '3': 'discoverer' }[metaId];
+            return mapped || 'none';
+        }
+
+        if (sprite.classList.contains('miner')) return 'collector';
+        if (sprite.classList.contains('warrior')) return 'general';
+        if (sprite.classList.contains('discoverer') || sprite.classList.contains('explorer')) return 'discoverer';
+
+        return 'none';
+    }
+
+    function detectActiveRaceFromBuildings(planet) {
+        const counts = { 1: 0, 2: 0, 3: 0, 4: 0 };
+        Object.entries(planet).forEach(([id, val]) => {
+            const numericId = parseInt(id);
+            const level = parseInt(val) || 0;
+            if (level > 0) {
+                if (numericId >= 11100 && numericId < 12000) counts[1]++;
+                if (numericId >= 12100 && numericId < 13000) counts[2]++;
+                if (numericId >= 13100 && numericId < 14000) counts[3]++;
+                if (numericId >= 14100 && numericId < 15000) counts[4]++;
+            }
+        });
+
+        let activeRaceId = 0;
+        let maxCount = 0;
+        Object.entries(counts).forEach(([id, count]) => {
+            if (count > maxCount) {
+                maxCount = count;
+                activeRaceId = parseInt(id);
+            }
+        });
+        return activeRaceId;
+    }
+
+    // LF Tech metadata: ID -> details
+    const LF_TECH_DATA = {
+        // Human
+        11201: { name: "Intergalactic Envoys", baseCost: [5000, 2500, 500], factorCost: 1.3, bonus: { type: 'expedition', base: 1, factor: 1 } },
+        11202: { name: "High-Performance Extractors", baseCost: [7000, 10000, 5000], factorCost: 1.5, bonus: { type: 'prod', base: 0.06, factor: 1 } },
+        11203: { name: "Fusion Drives", baseCost: [15000, 10000, 5000], factorCost: 1.3, bonus: { type: 'speed', base: 0.5, factor: 1 } },
+        11204: { name: "Stealth Field Generator", baseCost: [20000, 15000, 7500], factorCost: 1.3, bonus: { type: 'none', base: 0.1, factor: 1 } },
+        11205: { name: "Orbital Den", baseCost: [25000, 20000, 10000], factorCost: 1.3, bonus: { type: 'none', base: 4, factor: 1 } },
+        11206: { name: "Research AI", baseCost: [35000, 25000, 15000], factorCost: 1.5, bonus: { type: 'research', base: 0.1, factor: 1 } },
+
+
+        11207: { name: "High-Performance Terraformer", baseCost: [70000, 40000, 20000], factorCost: 1.3, bonus: { type: 'none', base: 0.1, factor: 1 } },
+        11208: { name: "Enhanced Production Technologies", baseCost: [80000, 50000, 20000], factorCost: 1.5, bonus: { type: 'prod', base: 0.06, factor: 1 } },
+        11209: { name: "Light Fighter Mk II", baseCost: [320000, 240000, 100000], factorCost: 1.5, bonus: { type: 'none', base: 0.3, factor: 1 } },
+        11210: { name: "Cruiser Mk II", baseCost: [320000, 240000, 100000], factorCost: 1.5, bonus: { type: 'none', base: 0.3, factor: 1 } },
+        11211: { name: "Improved Lab Technology", baseCost: [120000, 30000, 25000], factorCost: 1.5, bonus: { type: 'research', base: 0.1, factor: 1 } },
+        11212: { name: "Plasma Terraformer", baseCost: [100000, 40000, 30000], factorCost: 1.3, bonus: { type: 'none', base: 0.1, factor: 1 } },
+        11213: { name: "Low-Temperature Drives", baseCost: [200000, 100000, 100000], factorCost: 1.3, bonus: { type: 'speed', base: 0.1, factor: 1 } },
+        11214: { name: "Bomber Mk II", baseCost: [160000, 120000, 50000], factorCost: 1.5, bonus: { type: 'none', base: 0.3, factor: 1 } },
+        11215: { name: "Destroyer Mk II", baseCost: [160000, 120000, 50000], factorCost: 1.5, bonus: { type: 'none', base: 0.3, factor: 1 } },
+        11216: { name: "Battlecruiser Mk II", baseCost: [320000, 240000, 100000], factorCost: 1.5, bonus: { type: 'none', base: 0.3, factor: 1 } },
+        11217: { name: "Robot Assistants", baseCost: [300000, 180000, 120000], factorCost: 1.5, bonus: { type: 'research', base: 0.2, factor: 1 } },
+        11218: { name: "Supercomputer", baseCost: [500000, 300000, 200000], factorCost: 1.2, bonus: { type: 'prod', base: 0.3, factor: 1 } },
+        // Rock'tal
+        12201: { name: "Volcanic Batteries", baseCost: [10000, 6000, 1000], factorCost: 1.5, bonus: { type: 'energy', base: 0.25, factor: 1 } },
+        12202: { name: "Acoustic Scanning", baseCost: [7500, 12500, 5000], factorCost: 1.5, bonus: { type: 'prod', base: 0.08, factor: 1 } },
+        12203: { name: "High Energy Pump Systems", baseCost: [15000, 10000, 5000], factorCost: 1.5, bonus: { type: 'deut-prod', base: 0.08, factor: 1 } },
+        12204: { name: "Cargo Hold Expansion (Civilian Ships)", baseCost: [20000, 15000, 7500], factorCost: 1.3, bonus: { type: 'none', base: 0.4, factor: 1 } },
+        12205: { name: "Magma-Powered Production", baseCost: [25000, 20000, 10000], factorCost: 1.5, bonus: { type: 'prod', base: 0.08, factor: 1 } },
+        12206: { name: "Geothermal Power Plants", baseCost: [50000, 50000, 20000], factorCost: 1.5, bonus: { type: 'none', base: 0.25, factor: 1 } },
+        12207: { name: "Depth Sounding", baseCost: [70000, 40000, 20000], factorCost: 1.5, bonus: { type: 'metal-prod', base: 0.08, factor: 1 } },
+        12208: { name: "Ion Crystal Enhancement (Heavy Fighter)", baseCost: [160000, 120000, 50000], factorCost: 1.5, bonus: { type: 'none', base: 0.3, factor: 1 } },
+        12209: { name: "Improved Stellarator", baseCost: [75000, 55000, 25000], factorCost: 1.5, bonus: { type: 'none', base: 0.15, factor: 1 } },
+        12210: { name: "Hardened Diamond Drill Heads", baseCost: [85000, 40000, 35000], factorCost: 1.5, bonus: { type: 'metal-prod', base: 0.08, factor: 1 } },
+        12211: { name: "Seismic Mining Technology", baseCost: [120000, 30000, 25000], factorCost: 1.5, bonus: { type: 'crystal-prod', base: 0.08, factor: 1 } },
+        12212: { name: "Magma-Powered Pump Systems", baseCost: [100000, 40000, 30000], factorCost: 1.5, bonus: { type: 'prod', base: 0.08, factor: 1 } },
+        12213: { name: "Ion Crystal Modules", baseCost: [200000, 100000, 100000], factorCost: 1.2, bonus: { type: 'none', base: 0.1, factor: 1 } },
+        12214: { name: "Optimised Silo Construction Method", baseCost: [220000, 110000, 110000], factorCost: 1.3, bonus: { type: 'none', base: 0.1, factor: 1 } },
+        12215: { name: "Diamond Energy Transmitter", baseCost: [240000, 120000, 120000], factorCost: 1.3, bonus: { type: 'none', base: 0.1, factor: 1 } },
+        12216: { name: "Obsidian Shield Reinforcement", baseCost: [250000, 250000, 250000], factorCost: 1.4, bonus: { type: 'none', base: 0.5, factor: 1 } },
+        12217: { name: "Rune Shields", baseCost: [500000, 300000, 200000], factorCost: 1.5, bonus: { type: 'none', base: 0.2, factor: 1 } },
+        12218: { name: "Rock’tal Collector Enhancement", baseCost: [300000, 180000, 120000], factorCost: 1.7, bonus: { type: 'collector', base: 0.2, factor: 1 } },
+        // Mecha
+        13201: { name: "Catalyser Technology", baseCost: [10000, 6000, 1000], factorCost: 1.5, bonus: { type: 'prod', base: 0.08, factor: 1 } },
+        13202: { name: "Plasma Drive", baseCost: [7500, 12500, 5000], factorCost: 1.3, bonus: { type: 'speed', base: 0.2, factor: 1 } },
+        13203: { name: "Efficiency Module", baseCost: [15000, 10000, 5000], factorCost: 1.5, bonus: { type: 'prod', base: 0.03, factor: 1 } },
+        13204: { name: "Depot AI", baseCost: [20000, 15000, 7500], factorCost: 1.3, bonus: { type: 'none', base: 0.1, factor: 1 } },
+        13205: { name: "General Overhaul (Light Fighter)", baseCost: [160000, 120000, 50000], factorCost: 1.5, bonus: { type: 'none', base: 0.3, factor: 1 } },
+        13206: { name: "Automated Transport Lines", baseCost: [50000, 50000, 20000], factorCost: 1.5, bonus: { type: 'prod', base: 0.06, factor: 1 } },
+        13207: { name: "Improved Drone AI", baseCost: [70000, 40000, 20000], factorCost: 1.3, bonus: { type: 'expedition', base: 0.1, factor: 1 } },
+        13208: { name: "Experimental Recycling Technology", baseCost: [160000, 120000, 50000], factorCost: 1.5, bonus: { type: 'none', base: 1, factor: 1 } },
+        13209: { name: "General Overhaul (Cruiser)", baseCost: [160000, 120000, 50000], factorCost: 1.5, bonus: { type: 'none', base: 0.3, factor: 1 } },
+        13210: { name: "Slingshot Autopilot", baseCost: [85000, 40000, 35000], factorCost: 1.2, bonus: { type: 'none', base: 0.15, factor: 1 } },
+        13211: { name: "High-Temperature Superconductors", baseCost: [120000, 30000, 25000], factorCost: 1.3, bonus: { type: 'research', base: 0.1, factor: 1 } },
+        13212: { name: "General Overhaul (Battleship)", baseCost: [160000, 120000, 50000], factorCost: 1.5, bonus: { type: 'none', base: 0.3, factor: 1 } },
+        13213: { name: "Artificial Swarm Intelligence", baseCost: [200000, 100000, 100000], factorCost: 1.5, bonus: { type: 'prod', base: 0.06, factor: 1 } },
+        13214: { name: "General Overhaul (Battlecruiser)", baseCost: [160000, 120000, 50000], factorCost: 1.5, bonus: { type: 'none', base: 0.3, factor: 1 } },
+        13215: { name: "General Overhaul (Bomber)", baseCost: [320000, 240000, 100000], factorCost: 1.5, bonus: { type: 'none', base: 0.3, factor: 1 } },
+        13216: { name: "General Overhaul (Destroyer)", baseCost: [320000, 240000, 100000], factorCost: 1.5, bonus: { type: 'none', base: 0.3, factor: 1 } },
+        13217: { name: "Experimental Weapons Technology", baseCost: [500000, 300000, 200000], factorCost: 1.5, bonus: { type: 'research', base: 0.2, factor: 1 } },
+        13218: { name: "Mechan General Enhancement", baseCost: [300000, 180000, 120000], factorCost: 1.7, bonus: { type: 'general', base: 0.2, factor: 1 } },
+        // Kaelesh
+        14201: { name: "Heat Recovery", baseCost: [10000, 6000, 1000], factorCost: 1.5, bonus: { type: 'prod', base: 0.03, factor: 1 } },
+        14202: { name: "Sulphide Process", baseCost: [7500, 12500, 5000], factorCost: 1.5, bonus: { type: 'prod', base: 0.08, factor: 1 } },
+        14203: { name: "Psionic Network", baseCost: [15000, 10000, 5000], factorCost: 1.5, bonus: { type: 'expedition', base: 0.05, factor: 1 } },
+        14204: { name: "Telekinetic Tractor Beam", baseCost: [20000, 15000, 7500], factorCost: 1.5, bonus: { type: 'none', base: 0.2, factor: 1 } },
+        14205: { name: "Enhanced Sensor Technology", baseCost: [25000, 20000, 10000], factorCost: 1.5, bonus: { type: 'expedition', base: 0.2, factor: 1 } },
+        14206: { name: "Neuromodal Compressor", baseCost: [50000, 50000, 20000], factorCost: 1.3, bonus: { type: 'none', base: 0.4, factor: 1 } },
+        14207: { name: "Neuro-Interface", baseCost: [70000, 40000, 20000], factorCost: 1.5, bonus: { type: 'research', base: 0.1, factor: 1 } },
+        14208: { name: "Interplanetary Analysis Network", baseCost: [80000, 50000, 20000], factorCost: 1.2, bonus: { type: 'exploration', base: 0.6, factor: 1 } },
+        14209: { name: "Overclocking (Heavy Fighter)", baseCost: [320000, 240000, 100000], factorCost: 1.5, bonus: { type: 'none', base: 0.3, factor: 1 } },
+        14210: { name: "Telekinetic Drive", baseCost: [85000, 40000, 35000], factorCost: 1.2, bonus: { type: 'speed', base: 0.1, factor: 1 } },
+        14211: { name: "Sixth Sense", baseCost: [120000, 30000, 25000], factorCost: 1.5, bonus: { type: 'expedition', base: 0.2, factor: 1 } },
+        14212: { name: "Psychoharmoniser", baseCost: [100000, 40000, 30000], factorCost: 1.5, bonus: { type: 'prod', base: 0.06, factor: 1 } },
+        14213: { name: "Efficient Swarm Intelligence", baseCost: [200000, 100000, 100000], factorCost: 1.5, bonus: { type: 'prod', base: 0.1, factor: 1 } },
+        14214: { name: "Overclocking (Large Cargo)", baseCost: [160000, 120000, 50000], factorCost: 1.5, bonus: { type: 'none', base: 1, factor: 1 } },
+        14215: { name: "Gravitation Sensors", baseCost: [240000, 120000, 120000], factorCost: 1.5, bonus: { type: 'expedition', base: 0.1, factor: 1 } },
+        14216: { name: "Overclocking (Battleship)", baseCost: [320000, 240000, 100000], factorCost: 1.5, bonus: { type: 'none', base: 0.3, factor: 1 } },
+        14217: { name: "Psionic Shield Matrix", baseCost: [500000, 300000, 200000], factorCost: 1.5, bonus: { type: 'none', base: 0.2, factor: 1 } },
+        14218: { name: "Kaelesh Discoverer Enhancement", baseCost: [300000, 180000, 120000], factorCost: 1.7, bonus: { type: 'discoverer', base: 0.2, factor: 1 } },
+    };
+
+    const LF_TECH_SLOTS = [1, 2, 3, 5, 6, 7, 8, 10, 11, 12];
 
     // User-verified LF Buildings with bonus mappings (from param_config.json)
     const LF_BUILDINGS = {
@@ -67,17 +182,17 @@
     // User-verified LF Techs organized by position (each position can have different tech per lifeform)
     // Players can choose ANY tech at each position, independent of active lifeform
     const LF_TECHS_BY_POSITION = [
-        { pos: 1, name: 'Catalyzer', ids: { mecha: 13201 } },
-        { pos: 2, name: 'Extract/Sulf/Acoustic', ids: { human: 12212, kaelesh: 14202, rocktal: 12202 } },
-        { pos: 3, name: 'HE Pump', ids: { rocktal: 12203 } },
-        { pos: 5, name: 'Magma Prod', ids: { rocktal: 12205 } },
-        { pos: 6, name: 'Auto Trans', ids: { mecha: 13206 } },
-        { pos: 7, name: 'Depth Snd', ids: { rocktal: 12207 } },
-        { pos: 8, name: 'Enh Prod', ids: { human: 11208 } },
-        { pos: 10, name: 'Dia Drill', ids: { rocktal: 12210 } },
-        { pos: 11, name: 'Seismic', ids: { rocktal: 12211 } },
-        { pos: 12, name: 'M.Pump/Psycho', ids: { rocktal: 12212, kaelesh: 14212 } },
-        { pos: 13, name: 'AI Swarm', ids: { mecha: 13213 } }
+        { pos: 1, name: 'T1 - Slot 1', ids: { human: 11201, rocktal: 12201, mecha: 13201, kaelesh: 14201 } },
+        { pos: 2, name: 'T1 - Slot 2', ids: { human: 11202, rocktal: 12202, mecha: 13202, kaelesh: 14202 } },
+        { pos: 3, name: 'T1 - Slot 3', ids: { human: 11203, rocktal: 12203, mecha: 13203, kaelesh: 14203 } },
+        { pos: 5, name: 'T1 - Slot 5', ids: { human: 11205, rocktal: 12205, mecha: 13205, kaelesh: 14205 } },
+        { pos: 6, name: 'T1 - Slot 6', ids: { human: 11206, rocktal: 12206, mecha: 13206, kaelesh: 14206 } },
+        { pos: 7, name: 'T2 - Slot 7', ids: { human: 11207, rocktal: 12207, mecha: 13207, kaelesh: 14207 } },
+        { pos: 8, name: 'T2 - Slot 8', ids: { human: 11208, rocktal: 12208, mecha: 13208, kaelesh: 14208 } },
+        { pos: 10, name: 'T2 - Slot 10', ids: { human: 11210, rocktal: 12210, mecha: 13210, kaelesh: 14210 } },
+        { pos: 11, name: 'T2 - Slot 11', ids: { human: 11211, rocktal: 12211, mecha: 13211, kaelesh: 14211 } },
+        { pos: 12, name: 'T2 - Slot 12', ids: { human: 11212, rocktal: 12212, mecha: 13212, kaelesh: 14212 } },
+        { pos: 13, name: 'T3 - Slot 13', ids: { human: 11213, rocktal: 12213, mecha: 13213, kaelesh: 14213 } }
     ];
 
     // --- Data Fetcher ---
@@ -111,14 +226,14 @@
                                 }
                             }
                         })
-                        .catch(err => console.error(`ROI Advisor: Error fetching type ${type}`, err))
+                        .catch(err => console.error(`OptiMine: Error fetching type ${type}`, err))
                 );
 
                 await Promise.all(promises);
-                console.log('ROI Advisor: Empire Data Fetched', this.empireData);
+                console.log('OptiMine: Empire Data Fetched', this.empireData);
                 return this.empireData;
             } catch (error) {
-                console.error('ROI Advisor: Critical Error fetching Empire Data', error);
+                console.error('OptiMine: Critical Error fetching Empire Data', error);
                 return null;
             }
         }
@@ -172,16 +287,16 @@
                     this.lfBonuses[id] = { raw: bonuses };
                 });
 
-                console.log('ROI Advisor: LF Bonuses Fetched', this.lfBonuses);
+                console.log('OptiMine: LF Bonuses Fetched', this.lfBonuses);
                 return this.lfBonuses;
             } catch (error) {
-                console.error('ROI Advisor: Error fetching LF Bonuses', error);
+                console.error('OptiMine: Error fetching LF Bonuses', error);
                 return null;
             }
         }
 
         async fetchAll() {
-            console.log('ROI Advisor: Fetching all data...');
+            console.log('OptiMine: Fetching all data...');
             await Promise.all([this.fetchEmpireData(), this.fetchLFBonuses()]);
             return {
                 empire: this.empireData,
@@ -195,7 +310,7 @@
         constructor(dataFetcher, calculator) {
             this.dataFetcher = dataFetcher;
             this.calculator = calculator;
-            this.modalId = 'roi-advisor-modal';
+            this.modalId = 'optimine-modal';
             this.isOpen = false;
             this.contentContainer = null; // To store the content div for re-rendering
             this.activeTabIndex = 0; // To keep track of the currently active tab
@@ -205,13 +320,17 @@
             const menu = document.querySelector('#menuTable');
             if (!menu) return;
 
+            // Check if button already exists
+            if (document.getElementById('optimine-btn')) return;
+
             const buttonContainer = document.createElement('li');
+            buttonContainer.id = 'optimine-btn';
             buttonContainer.className = 'menubutton_table';
 
             const link = document.createElement('a');
             link.className = 'menubutton';
             link.href = '#';
-            link.innerHTML = '<span class="textlabel" style="color: #4a9eff;">ROI Advisor</span>';
+            link.innerHTML = '<span class="textlabel" style="color: #4a9eff;">OptiMine</span>';
             link.onclick = (e) => {
                 e.preventDefault();
                 this.toggleModal();
@@ -279,7 +398,7 @@
             });
 
             const title = document.createElement('h3');
-            title.innerText = 'ROI Advisor (v2.1) by Bel Veste';
+            title.innerText = 'OptiMine (v2.1) by Bel Veste';
             header.appendChild(title);
 
             const controls = document.createElement('div');
@@ -326,7 +445,7 @@
                 borderBottom: '1px solid #333'
             });
 
-            const tabs = ['ROI Advisor', 'Mines', 'Research', 'LF Buildings', 'LF Techs'];
+            const tabs = ['OptiMine', 'Mines', 'Research', 'LF Buildings', 'LF Techs'];
             const contentContainer = document.createElement('div');
             Object.assign(contentContainer.style, {
                 flex: '1',
@@ -446,7 +565,7 @@
             header.innerHTML = `
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <div>
-                        <h3 style="margin:0 0 10px 0;">ROI Advisor - Top Investment Opportunities</h3>
+                        <h3 style="margin:0 0 10px 0;">OptiMine - Top Investment Opportunities</h3>
                         <div style="font-size:11px; color:#888;">Sorted by best return on investment (ROI in days)</div>
                     </div>
                     <div style="text-align:right;">
@@ -471,8 +590,8 @@
             // Sort by ROI (ascending - best ROI first)
             opportunities.sort((a, b) => a.roiDays - b.roiDays);
 
-            // Take top 30
-            const top30 = opportunities.slice(0, 30);
+            // Take top 100
+            const topOpportunities = opportunities.slice(0, 100);
 
             // Display table
             const table = document.createElement('table');
@@ -496,7 +615,7 @@
             table.appendChild(thead);
 
             const tbody = document.createElement('tbody');
-            top30.forEach((opp, index) => {
+            topOpportunities.forEach((opp, index) => {
                 const row = document.createElement('tr');
                 row.style.cssText = index % 2 === 0 ? 'background:#1a1a2e;' : '';
                 row.innerHTML = `
@@ -542,19 +661,25 @@
             // Get universe speed from meta tag
             const universeSpeed = this.getUniverseSpeed();
 
-            // Calculate GLOBAL LF Tech bonuses (sum across ALL planets - techs apply account-wide)
-            const savedTechData = this.loadLFTechData();
+            // Calculate GLOBAL LF Tech bonuses (using interactive selection data)
+            const selectionData = JSON.parse(localStorage.getItem(`${SCRIPT_ID}_lf_tech_selections`) || '{}');
             let globalMetalTechBonus = 0;
             let globalCrystalTechBonus = 0;
             let globalDeutTechBonus = 0;
+            let globalCollectorTechBonus = 0;
 
             Object.values(data).forEach(planet => {
                 if (planet.isMoon) return;
-                const techBonuses = this.calculatePlanetTechBonuses(planet.id, savedTechData);
+                const techBonuses = this.calculatePlanetTechBonuses(planet.id, selectionData, planet);
                 globalMetalTechBonus += techBonuses.metal;
                 globalCrystalTechBonus += techBonuses.crystal;
                 globalDeutTechBonus += techBonuses.deut;
+                globalCollectorTechBonus += techBonuses.collector;
             });
+
+            const playerClass = getPlayerClass();
+            const baseClassBonus = playerClass === 'collector' ? 25 : 0;
+            const enhancedClassBonus = baseClassBonus + (playerClass === 'collector' ? globalCollectorTechBonus : 0);
 
             // Display GLOBAL Tech Bonuses at top (Plasma + LF Techs)
             const globalMetalBonus = plasmaMetalBonus + globalMetalTechBonus;
@@ -562,10 +687,16 @@
             const globalDeutBonus = plasmaDeutBonus + globalDeutTechBonus;
 
             const bonusSummary = document.createElement('div');
-            bonusSummary.style.cssText = 'padding:10px; margin-bottom:15px; background:#1a1a2e; border-radius:5px; display:flex; justify-content:space-around;';
+            bonusSummary.style.cssText = 'padding:10px; margin-bottom:15px; background:#1a1a2e; border-radius:5px; display:flex; justify-content:space-around; align-items:center;';
+
+            const classDisplay = playerClass === 'collector' ?
+                `<div style="color:#f1c40f; font-weight:bold; font-size:11px;">Collector Class: +${enhancedClassBonus.toFixed(2)}% Bonus Applied (${baseClassBonus}% Base + ${globalCollectorTechBonus.toFixed(2)}% LF)</div>` :
+                `<div style="color:#888; font-size:11px;">Player Class: ${playerClass.charAt(0).toUpperCase() + playerClass.slice(1)}</div>`;
+
             bonusSummary.innerHTML = `
                 <div style="text-align:center;">
                     <div style="font-size:10px; color:#888; margin-bottom:5px;">Universe Speed: ${universeSpeed}x</div>
+                    ${classDisplay}
                 </div>
                 <div style="text-align:center;">
                     <div style="font-size:12px; color:#888; margin-bottom:5px;">Global Tech Bonus (Metal)</div>
@@ -619,11 +750,10 @@
                 // Get position bonuses - these are now part of BASE, not bonuses
                 const positionBonus = this.getPositionBonus(position);
 
-                // Total DISPLAYED bonuses = Global Tech + Buildings (planet only)
-                // Position bonuses are NOT shown, they're built into base
-                const totalPlanetMetalBonus = globalMetalBonus + planetBuildingBonus.metal;
-                const totalPlanetCrystalBonus = globalCrystalBonus + planetBuildingBonus.crystal;
-                const totalPlanetDeutBonus = globalDeutBonus + planetBuildingBonus.deut;
+                // Total DISPLAYED bonuses = Global Tech + Buildings (planet only) + Collector Class (Enhanced)
+                const totalPlanetMetalBonus = globalMetalBonus + planetBuildingBonus.metal + enhancedClassBonus;
+                const totalPlanetCrystalBonus = globalCrystalBonus + planetBuildingBonus.crystal + enhancedClassBonus;
+                const totalPlanetDeutBonus = globalDeutBonus + planetBuildingBonus.deut + enhancedClassBonus;
 
                 // Base production formulas (per hour) - BEFORE universe speed
                 // Temperature and position effects are BUILT IN to base
@@ -778,57 +908,6 @@
             return bonuses;
         }
 
-        calculateLFBuildingBonuses(planet) {
-            let mB = 0, cB = 0, dB = 0;
-
-            // Detect Active Lifeform
-            const h1 = parseInt(planet['11101']) || 0;
-            const r1 = parseInt(planet['12101']) || 0;
-            const m1 = parseInt(planet['13101']) || 0;
-            const k1 = parseInt(planet['14101']) || 0;
-
-            let activeKey = '';
-            let maxTier1 = Math.max(h1, r1, m1, k1);
-            if (maxTier1 > 0) {
-                if (h1 === maxTier1) activeKey = 'human';
-                else if (r1 === maxTier1) activeKey = 'rocktal';
-                else if (m1 === maxTier1) activeKey = 'mecha';
-                else if (k1 === maxTier1) activeKey = 'kaelesh';
-            }
-
-            if (activeKey && LF_BUILDINGS[activeKey]) {
-                LF_BUILDINGS[activeKey].forEach(building => {
-                    const level = parseInt(planet[building.id]) || 0;
-                    if (level > 0) {
-                        const bonus = level * building.baseValue * building.increaseFactor;
-                        if (building.bonusType === 'metal') mB += bonus;
-                        else if (building.bonusType === 'crystal') cB += bonus;
-                        else if (building.bonusType === 'deut') dB += bonus;
-                    }
-                });
-            }
-
-            return { metal: mB, crystal: cB, deut: dB };
-        }
-
-        calculatePlanetTechBonuses(planetId, savedTechData) {
-            let mB = 0, cB = 0, dB = 0;
-
-            const planetData = savedTechData[planetId] || {};
-            const positions = [1, 2, 3, 5, 6, 7, 8, 10, 11, 12, 13];
-
-            positions.forEach(pos => {
-                const cellData = planetData[`pos${pos}`];
-                if (cellData && cellData.techId && cellData.level > 0) {
-                    const bonus = this.calculateTechBonus(cellData.techId, cellData.level);
-                    mB += bonus.metal || 0;
-                    cB += bonus.crystal || 0;
-                    dB += bonus.deut || 0;
-                }
-            });
-
-            return { metal: mB, crystal: cB, deut: dB };
-        }
 
         calculateBaseProduction(level, mineType, planet) {
             // OGame production formulas (per hour, assuming 100% power)
@@ -839,10 +918,11 @@
 
             if (level === 0) return 0;
 
+            let baseProduction = 0;
             if (mineType === 1) { // Metal
-                return Math.floor(30 * level * Math.pow(1.1, level));
+                baseProduction = Math.floor(30 * level * Math.pow(1.1, level));
             } else if (mineType === 2) { // Crystal
-                return Math.floor(20 * level * Math.pow(1.1, level));
+                baseProduction = Math.floor(20 * level * Math.pow(1.1, level));
             } else if (mineType === 3) { // Deuterium
                 // Get average temperature (between min and max)
                 let avgTemp = 50; // default
@@ -871,9 +951,11 @@
                 // Note: A (universe speed) is applied later, not here
                 const tempFactor = 1.36 - (0.004 * avgTemp);
                 const base = 10;
-                return Math.floor(base * level * Math.pow(1.1, level) * tempFactor);
+                baseProduction = Math.floor(base * level * Math.pow(1.1, level) * tempFactor);
             }
-            return 0;
+
+            // BaseProduction calculation remains raw
+            return baseProduction;
         }
 
         formatNumber(num) {
@@ -944,13 +1026,40 @@
             let globalMetalTechBonus = 0;
             let globalCrystalTechBonus = 0;
             let globalDeutTechBonus = 0;
+            let globalCollectorTechBonus = 0;
+            let globalGeneralTechBonus = 0;
+            let globalDiscovererTechBonus = 0;
+
+            let empireBaseMetal = 0;
+            let empireBaseCrystal = 0;
+            let empireBaseDeut = 0;
 
             Object.values(data).forEach(planet => {
                 if (planet.isMoon) return;
-                const techBonuses = this.calculatePlanetTechBonuses(planet.id, savedTechData);
+                const techBonuses = this.calculatePlanetTechBonuses(planet.id, savedTechData, planet);
                 globalMetalTechBonus += techBonuses.metal;
                 globalCrystalTechBonus += techBonuses.crystal;
                 globalDeutTechBonus += techBonuses.deut;
+                globalCollectorTechBonus += techBonuses.collector;
+                globalGeneralTechBonus += techBonuses.general;
+                globalDiscovererTechBonus += techBonuses.discoverer;
+
+                // Aggregate empire base production for global tech ROI
+                const coords = planet.coordinates ? planet.coordinates.replace('[', '').replace(']', '') : '';
+                const position = coords ? parseInt(coords.split(':')[2]) || 0 : 0;
+                const positionBonus = this.getPositionBonus(position);
+
+                const mLevel = parseInt(planet['1']) || 0;
+                const cLevel = parseInt(planet['2']) || 0;
+                const dLevel = parseInt(planet['3']) || 0;
+
+                const rawM = this.calculateBaseProduction(mLevel, 1, planet);
+                const rawC = this.calculateBaseProduction(cLevel, 2, planet);
+                const rawD = this.calculateBaseProduction(dLevel, 3, planet);
+
+                empireBaseMetal += rawM * (1 + positionBonus.metal / 100) * universeSpeed;
+                empireBaseCrystal += rawC * (1 + positionBonus.crystal / 100) * universeSpeed;
+                empireBaseDeut += rawD * universeSpeed;
             });
 
             // Process each planet
@@ -960,14 +1069,80 @@
                 const coords = planet.coordinates ? planet.coordinates.replace('[', '').replace(']', '') : '';
                 const position = coords ? parseInt(coords.split(':')[2]) || 0 : 0;
 
+                // LF TECH ROI (Calculated per planet slot selection)
+                const planetId = planet.id;
+                const planetTechs = savedTechData[planetId] || {};
+                const positions = [1, 2, 3, 5, 6, 7, 8, 10, 11, 12, 13];
+
+                positions.forEach(pos => {
+                    const posData = planetTechs[`pos${pos}`];
+                    if (posData && posData.techId) {
+                        const techId = posData.techId;
+                        const tech = LF_TECH_DATA[techId];
+                        if (tech && tech.bonus) {
+                            const currentLevel = parseInt(planet[techId]) || 0;
+                            const nextLevel = currentLevel + 1;
+
+                            // Cost for next level
+                            const techCost = this.getLFTechCost(techId, nextLevel);
+                            const costMSU = this.toMSU(techCost.metal, techCost.crystal, techCost.deut, msuRatios);
+
+                            // Production increase (Global impact)
+                            // Bonus increase per level: tech.bonus.base * tech.bonus.factor
+                            const bonusIncrease = tech.bonus.base * tech.bonus.factor;
+                            let prodIncreaseMSU = 0;
+
+                            const normalizedRatios = this.normalizeRatios(msuRatios);
+
+                            if (tech.bonus.type === 'prod' || tech.bonus.type === 'collector') {
+                                // Impact on all resources
+                                const incM = empireBaseMetal * (bonusIncrease / 100);
+                                const incC = empireBaseCrystal * (bonusIncrease / 100);
+                                const incD = empireBaseDeut * (bonusIncrease / 100);
+                                prodIncreaseMSU = (incM * normalizedRatios.metal) + (incC * normalizedRatios.crystal) + (incD * normalizedRatios.deut);
+                            } else if (tech.bonus.type === 'metal-prod') {
+                                const incM = empireBaseMetal * (bonusIncrease / 100);
+                                prodIncreaseMSU = incM * normalizedRatios.metal;
+                            } else if (tech.bonus.type === 'crystal-prod') {
+                                const incC = empireBaseCrystal * (bonusIncrease / 100);
+                                prodIncreaseMSU = incC * normalizedRatios.crystal;
+                            } else if (tech.bonus.type === 'deut-prod') {
+                                const incD = empireBaseDeut * (bonusIncrease / 100);
+                                prodIncreaseMSU = incD * normalizedRatios.deut;
+                            }
+
+                            if (prodIncreaseMSU > 0) {
+                                const prodDailyMSU = prodIncreaseMSU * 24;
+                                const roiDays = costMSU / prodDailyMSU;
+
+                                opportunities.push({
+                                    planetName: planet.name,
+                                    type: `Tech: ${tech.name}`,
+                                    color: this.getTechColor(techId, pos),
+                                    currentLevel,
+                                    nextLevel,
+                                    costMSU,
+                                    prodIncreaseMSU,
+                                    prodDailyMSU,
+                                    roiDays
+                                });
+                            }
+                        }
+                    }
+                });
+
                 // Get planet bonuses
                 const planetBuildingBonus = this.calculateLFBuildingBonuses(planet);
                 const positionBonus = this.getPositionBonus(position);
 
-                // Total bonuses per resource (Plasma + LF Techs[global] + LF Buildings[planet-specific])
-                const totalMetalBonus = plasmaMetalBonus + globalMetalTechBonus + planetBuildingBonus.metal;
-                const totalCrystalBonus = plasmaCrystalBonus + globalCrystalTechBonus + planetBuildingBonus.crystal;
-                const totalDeutBonus = plasmaDeutBonus + globalDeutTechBonus + planetBuildingBonus.deut;
+                // Total bonuses per resource (Plasma + LF Techs[global] + LF Buildings[planet-specific] + Collector Class)
+                const playerClass = getPlayerClass();
+                const baseClassBonus = playerClass === 'collector' ? 25 : 0;
+                const enhancedClassBonus = baseClassBonus + (playerClass === 'collector' ? globalCollectorTechBonus : 0);
+
+                const totalMetalBonus = plasmaMetalBonus + globalMetalTechBonus + planetBuildingBonus.metal + enhancedClassBonus;
+                const totalCrystalBonus = plasmaCrystalBonus + globalCrystalTechBonus + planetBuildingBonus.crystal + enhancedClassBonus;
+                const totalDeutBonus = plasmaDeutBonus + globalDeutTechBonus + planetBuildingBonus.deut + enhancedClassBonus;
 
                 // METAL MINE ROI
                 const metalLevel = parseInt(planet['1']) || 0;
@@ -1051,22 +1226,20 @@
                 }
 
                 // LF BUILDING ROI CALCULATIONS
-                // Detect Active Lifeform based on Tier 1 Building (same logic as renderLFBuildingsTab)
-                const h1 = parseInt(planet['11101']) || 0;
-                const r1 = parseInt(planet['12101']) || 0;
-                const m1 = parseInt(planet['13101']) || 0;
-                const k1 = parseInt(planet['14101']) || 0;
+                // BASE PRODUCTION FOR LF CALCULATIONS (includes position bonus and universe speed)
+                const rawMetalProd = this.calculateBaseProduction(metalLevel, 1, planet);
+                const rawCrystalProd = this.calculateBaseProduction(crystalLevel, 2, planet);
+                const rawDeutProd = this.calculateBaseProduction(parseInt(planet['3']) || 0, 3, planet);
 
-                let activeKey = '';
-                let maxTier1 = Math.max(h1, r1, m1, k1);
-                if (maxTier1 > 0) {
-                    if (h1 === maxTier1) activeKey = 'human';
-                    else if (r1 === maxTier1) activeKey = 'rocktal';
-                    else if (m1 === maxTier1) activeKey = 'mecha';
-                    else if (k1 === maxTier1) activeKey = 'kaelesh';
-                }
+                const baseMetalScaled = rawMetalProd * (1 + positionBonus.metal / 100) * universeSpeed;
+                const baseCrystalScaled = rawCrystalProd * (1 + positionBonus.crystal / 100) * universeSpeed;
+                const baseDeutScaled = rawDeutProd * universeSpeed;
 
-                // Only check buildings for the active lifeform on this planet
+                // Process LF Buildings
+                const raceId = detectActiveRaceFromBuildings(planet);
+                const raceToKey = { 1: 'human', 2: 'rocktal', 3: 'mecha', 4: 'kaelesh' };
+                const activeKey = raceToKey[raceId] || '';
+
                 if (activeKey && LF_BUILDINGS[activeKey]) {
                     LF_BUILDINGS[activeKey].forEach(building => {
                         const buildingLevel = parseInt(planet[building.id]) || 0;
@@ -1077,53 +1250,24 @@
                         const costMSU = this.toMSU(buildingCost.metal, buildingCost.crystal, buildingCost.deut, msuRatios);
 
                         // Calculate production increase from building bonus
-                        // Current building gives: buildingLevel × baseValue × increaseFactor
-                        // Next level gives: nextLevel × baseValue × increaseFactor
-                        const currentBuildingBonus = buildingLevel * building.baseValue * building.increaseFactor;
-                        const nextBuildingBonus = nextLevel * building.baseValue * building.increaseFactor;
-
-                        // Get affected mine and calculate production delta
-                        let mineType = 0;
-                        let colorCode = '';
+                        // Building bonuses are cumulative and apply to base production
+                        const bonusIncreasePerLevel = building.baseValue * building.increaseFactor;
                         let prodIncreaseHourly = 0;
+                        let colorCode = '';
+                        let mineType = 0;
 
-                        if (building.bonusType === 'metal') {
+                        if (building.bonusType === 'metal' && metalLevel > 0) {
                             mineType = 1;
                             colorCode = '#cd7f32';
-                            const metalLevel = parseInt(planet['1']) || 0;
-                            if (metalLevel > 0) {
-                                // Remove current building bonus, calculate production, then with next level
-                                const bonusWithoutBuilding = totalMetalBonus - currentBuildingBonus;
-                                const bonusWithNextLevel = bonusWithoutBuilding + nextBuildingBonus;
-
-                                const prodWithoutBuilding = this.calculateMineProduction(1, metalLevel, planet, position, bonusWithoutBuilding, universeSpeed);
-                                const bonusIncreasePerLevel = building.baseValue * building.increaseFactor;
-                                prodIncreaseHourly = prodWithoutBuilding * (bonusIncreasePerLevel / 100);
-                            }
-                        } else if (building.bonusType === 'crystal') {
+                            prodIncreaseHourly = baseMetalScaled * (bonusIncreasePerLevel / 100);
+                        } else if (building.bonusType === 'crystal' && crystalLevel > 0) {
                             mineType = 2;
                             colorCode = '#6fb1fc';
-                            const crystalLevel = parseInt(planet['2']) || 0;
-                            if (crystalLevel > 0) {
-                                const bonusWithoutBuilding = totalCrystalBonus - currentBuildingBonus;
-                                const bonusWithNextLevel = bonusWithoutBuilding + nextBuildingBonus;
-
-                                const prodWithoutBuilding = this.calculateMineProduction(2, crystalLevel, planet, position, bonusWithoutBuilding, universeSpeed);
-                                const bonusIncreasePerLevel = building.baseValue * building.increaseFactor;
-                                prodIncreaseHourly = prodWithoutBuilding * (bonusIncreasePerLevel / 100);
-                            }
-                        } else if (building.bonusType === 'deut') {
+                            prodIncreaseHourly = baseCrystalScaled * (bonusIncreasePerLevel / 100);
+                        } else if (building.bonusType === 'deut' && (parseInt(planet['3']) || 0) > 0) {
                             mineType = 3;
                             colorCode = '#6bde6b';
-                            const deutLevel = parseInt(planet['3']) || 0;
-                            if (deutLevel > 0) {
-                                const bonusWithoutBuilding = totalDeutBonus - currentBuildingBonus;
-                                const bonusWithNextLevel = bonusWithoutBuilding + nextBuildingBonus;
-
-                                const prodWithoutBuilding = this.calculateMineProduction(3, deutLevel, planet, position, bonusWithoutBuilding, universeSpeed);
-                                const bonusIncreasePerLevel = building.baseValue * building.increaseFactor;
-                                prodIncreaseHourly = prodWithoutBuilding * (bonusIncreasePerLevel / 100);
-                            }
+                            prodIncreaseHourly = baseDeutScaled * (bonusIncreasePerLevel / 100);
                         }
 
                         if (prodIncreaseHourly > 0) {
@@ -1243,6 +1387,155 @@
             `;
         }
 
+        loadLFTechData() {
+            try {
+                return JSON.parse(localStorage.getItem(`${SCRIPT_ID}_lf_tech_selections`) || '{}');
+            } catch (e) {
+                return {};
+            }
+        }
+
+        saveLFTechData(data) {
+            localStorage.setItem(`${SCRIPT_ID}_lf_tech_selections`, JSON.stringify(data));
+        }
+
+        getTechsForPosition(pos, planet) {
+            const posEntry = LF_TECHS_BY_POSITION.find(p => p.pos === pos);
+            if (!posEntry) return [];
+            const raceMap = { human: 'Human', rocktal: 'Rock’tal', mecha: 'Mecha', kaelesh: 'Kaelesh' };
+            const options = [];
+
+            // Define production-related types
+            const prodTypes = ['prod', 'metal-prod', 'crystal-prod', 'deut-prod', 'collector', 'general', 'discoverer'];
+
+            Object.entries(posEntry.ids).forEach(([race, id]) => {
+                const tech = LF_TECH_DATA[id];
+                // Only include if tech exists and provides a production-relevant bonus
+                if (tech && tech.bonus && prodTypes.includes(tech.bonus.type)) {
+                    const level = parseInt(planet[id]) || 0;
+                    options.push({
+                        id,
+                        shortName: `${raceMap[race]}: ${tech.name || id} (Lv ${level})`,
+                        level
+                    });
+                }
+            });
+            return options;
+        }
+
+        getTechColor(techId, pos) {
+            if (!techId) return '#1a1a2e'; // Default for no tech
+            const tech = LF_TECH_DATA[techId];
+            if (!tech) return '#1a1a2e';
+
+            const raceId = Math.floor(techId / 1000);
+            const raceColors = {
+                11: '#27ae60', // Human (Green)
+                12: '#e67e22', // Rock'tal (Orange)
+                13: '#2980b9', // Mecha (Blue)
+                14: '#8e44ad'  // Kaelesh (Purple)
+            };
+            return raceColors[raceId] || '#1a1a2e';
+        }
+
+        getTechInfo(techId) {
+            if (!techId) return null;
+            const tech = LF_TECH_DATA[techId];
+            if (!tech) return null;
+
+            const raceId = Math.floor(techId / 1000);
+            const raceMap = { 11: 'Human', 12: 'Rock’tal', 13: 'Mecha', 14: 'Kaelesh' };
+
+            return {
+                id: techId,
+                name: tech.name,
+                race: raceMap[raceId] || 'Unknown'
+            };
+        }
+
+        calculateLFBuildingBonuses(planet) {
+            const bonuses = { metal: 0, crystal: 0, deut: 0 };
+            const raceId = detectActiveRaceFromBuildings(planet);
+            const raceToKey = { 1: 'human', 2: 'rocktal', 3: 'mecha', 4: 'kaelesh' };
+            const activeKey = raceToKey[raceId] || '';
+
+            if (activeKey && LF_BUILDINGS[activeKey]) {
+                LF_BUILDINGS[activeKey].forEach(building => {
+                    const level = parseInt(planet[building.id]) || 0;
+                    if (level > 0) {
+                        const bonus = level * building.baseValue * building.increaseFactor;
+                        if (building.bonusType === 'metal') bonuses.metal += bonus;
+                        else if (building.bonusType === 'crystal') bonuses.crystal += bonus;
+                        else if (building.bonusType === 'deut') bonuses.deut += bonus;
+                    }
+                });
+            }
+            return bonuses;
+        }
+
+        calculatePlanetTechBonuses(planetId, selectionData, planet) {
+            const bonuses = { metal: 0, crystal: 0, deut: 0, collector: 0, general: 0, discoverer: 0 };
+            const slots = [1, 2, 3, 5, 6, 7, 8, 10, 11, 12, 13];
+            const planetData = selectionData[planetId] || {};
+
+            slots.forEach(pos => {
+                const cellData = planetData[`pos${pos}`] || {};
+                const techId = cellData.techId;
+                // Automatically read level from game data (planet object)
+                const level = techId ? (parseInt(planet[techId]) || 0) : 0;
+
+                if (techId && level > 0) {
+                    const b = this.calculateTechBonus(techId, level);
+                    bonuses.metal += b.metal;
+                    bonuses.crystal += b.crystal;
+                    bonuses.deut += b.deut;
+                    bonuses.collector += b.collector;
+                    bonuses.general += b.general;
+                    bonuses.discoverer += b.discoverer;
+                }
+            });
+            return bonuses;
+        }
+
+        calculateTechBonus(techId, level) {
+            const tech = LF_TECH_DATA[techId];
+            if (!tech || !tech.bonus || level <= 0) return { metal: 0, crystal: 0, deut: 0, collector: 0, general: 0, discoverer: 0 };
+
+            const perc = tech.bonus.base * tech.bonus.factor * level;
+
+            const result = { metal: 0, crystal: 0, deut: 0, collector: 0, general: 0, discoverer: 0 };
+            if (tech.bonus.type === 'prod') {
+                result.metal = result.crystal = result.deut = perc;
+            } else if (tech.bonus.type === 'metal-prod') {
+                result.metal = perc;
+            } else if (tech.bonus.type === 'crystal-prod') {
+                result.crystal = perc;
+            } else if (tech.bonus.type === 'deut-prod') {
+                result.deut = perc;
+            } else if (tech.bonus.type === 'collector') {
+                result.collector = perc;
+            } else if (tech.bonus.type === 'general') {
+                result.general = perc;
+            } else if (tech.bonus.type === 'discoverer') {
+                result.discoverer = perc;
+            }
+            return result;
+        }
+
+        getLFTechCost(techId, level) {
+            const tech = LF_TECH_DATA[techId];
+            if (!tech) return { metal: 0, crystal: 0, deut: 0 };
+
+            // OGame LF Tech cost formula: baseCost * level * factorCost^(level-1)
+            const multiplier = level * Math.pow(tech.factorCost, level - 1);
+
+            return {
+                metal: Math.floor(tech.baseCost[0] * multiplier),
+                crystal: Math.floor(tech.baseCost[1] * multiplier),
+                deut: Math.floor(tech.baseCost[2] * multiplier)
+            };
+        }
+
         renderLFBuildingsTab(container) {
             const data = this.dataFetcher.empireData;
             if (!data) {
@@ -1271,56 +1564,31 @@
             Object.values(data).forEach(planet => {
                 if (planet.isMoon) return;
 
-                // Detect Active Lifeform based on Tier 1 Building (11101, 12101, 13101, 14101)
-                const h1 = parseInt(planet['11101']) || 0;
-                const r1 = parseInt(planet['12101']) || 0;
-                const m1 = parseInt(planet['13101']) || 0;
-                const k1 = parseInt(planet['14101']) || 0;
-
-                let activeLifeform = 'None';
-                let activeKey = '';
-
-                // Determine active lifeform by highest tier 1 building
-                let maxTier1 = Math.max(h1, r1, m1, k1);
-                if (maxTier1 > 0) {
-                    if (h1 === maxTier1) { activeLifeform = 'Human'; activeKey = 'human'; }
-                    else if (r1 === maxTier1) { activeLifeform = 'Rocktal'; activeKey = 'rocktal'; }
-                    else if (m1 === maxTier1) { activeLifeform = 'Mecha'; activeKey = 'mecha'; }
-                    else if (k1 === maxTier1) { activeLifeform = 'Kaelesh'; activeKey = 'kaelesh'; }
-                }
+                const raceId = detectActiveRaceFromBuildings(planet);
+                const activeLFName = LF_RACES[raceId] || 'None';
+                const raceToKey = { 1: 'human', 2: 'rocktal', 3: 'mecha', 4: 'kaelesh' };
+                const activeKey = raceToKey[raceId] || '';
 
                 let buildingsList = '';
-                let mB = 0, cB = 0, dB = 0;
-
-                // Calculate bonuses for each building
                 if (activeKey && LF_BUILDINGS[activeKey]) {
                     LF_BUILDINGS[activeKey].forEach(building => {
                         const level = parseInt(planet[building.id]) || 0;
-                        if (level > 0) {
-                            buildingsList += `<div>${building.name}: ${level}</div>`;
-
-                            // Calculate bonus: level * baseValue * increaseFactor
-                            // Formula: bonus = level * baseValue * increaseFactor
-                            const bonus = level * building.baseValue * building.increaseFactor;
-
-                            // Add to appropriate bonus total
-                            if (building.bonusType === 'metal') mB += bonus;
-                            else if (building.bonusType === 'crystal') cB += bonus;
-                            else if (building.bonusType === 'deut') dB += bonus;
-                        }
+                        if (level > 0) buildingsList += `<div>${building.name}: ${level}</div>`;
                     });
                 }
+
+                const b = this.calculateLFBuildingBonuses(planet);
 
                 const row = document.createElement('tr');
                 row.innerHTML = `
                     <td style="border: 1px solid #444; padding: 5px;">${planet.name || 'Unknown'}</td>
-                    <td style="border: 1px solid #444; padding: 5px; font-weight:bold;">${activeLifeform}</td>
+                    <td style="border: 1px solid #444; padding: 5px; font-weight:bold;">${activeLFName}</td>
                     <td style="border: 1px solid #444; padding: 5px; font-size: 0.9em; vertical-align: top;">
                         ${buildingsList || '<span style="color:#666">-</span>'}
                     </td>
-                    <td style="border: 1px solid #444; padding: 5px;">${mB}%</td>
-                    <td style="border: 1px solid #444; padding: 5px;">${cB}%</td>
-                    <td style="border: 1px solid #444; padding: 5px;">${dB}%</td>
+                    <td style="border: 1px solid #444; padding: 5px;">${b.metal.toFixed(2)}%</td>
+                    <td style="border: 1px solid #444; padding: 5px;">${b.crystal.toFixed(2)}%</td>
+                    <td style="border: 1px solid #444; padding: 5px;">${b.deut.toFixed(2)}%</td>
                 `;
                 tbody.appendChild(row);
             });
@@ -1381,10 +1649,11 @@
                 let planetMetal = 0, planetCrystal = 0, planetDeut = 0;
 
                 positions.forEach(pos => {
-                    const cellData = planetData[`pos${pos}`] || { techId: null, level: 0 };
-                    const techs = this.getTechsForPosition(pos);
+                    const cellData = planetData[`pos${pos}`] || { techId: null };
+                    const techs = this.getTechsForPosition(pos, planet);
                     const techColor = this.getTechColor(cellData.techId, pos); // Pass position for color
                     const techInfo = this.getTechInfo(cellData.techId, pos); // Pass position for accurate lookup
+                    const actualLevel = cellData.techId ? (parseInt(planet[cellData.techId]) || 0) : 0;
 
                     tbody += `<td style="border:1px solid #444; padding:8px; text-align:center; min-width:120px;">`;
 
@@ -1393,10 +1662,11 @@
                         tbody += `<div style="margin:0 auto 8px; padding:6px; border-radius:6px; background:${techColor}; box-shadow:0 2px 4px rgba(0,0,0,0.3);">`;
                         tbody += `<div style="font-size:9px; font-weight:bold; color:#fff; text-transform:uppercase; margin-bottom:2px;">${techInfo.race}</div>`;
                         tbody += `<div style="font-size:10px; color:#fff;">${techInfo.name}</div>`;
+                        tbody += `<div style="font-size:11px; font-weight:bold; color:#fff; margin-top:4px; padding-top:4px; border-top:1px solid rgba(255,255,255,0.2);">Lv ${actualLevel}</div>`;
                         tbody += `</div>`;
                     } else {
                         // Empty placeholder
-                        tbody += `<div style="height:45px; margin:0 auto 8px; border:2px dashed #444; border-radius:6px; background:#1a1a2e; display:flex; align-items:center; justify-content:center; color:#666; font-size:9px;">No Tech</div>`;
+                        tbody += `<div style="height:55px; margin:0 auto 8px; border:2px dashed #444; border-radius:6px; background:#1a1a2e; display:flex; align-items:center; justify-content:center; color:#666; font-size:9px;">No Tech</div>`;
                     }
 
                     // Dropdown for tech selection
@@ -1406,18 +1676,13 @@
                         const selected = cellData.techId == tech.id ? 'selected' : '';
                         tbody += `<option value="${tech.id}" ${selected}>${tech.shortName}</option>`;
                     });
-                    tbody += `</select><br/>`;
-
-                    // Level input
-                    tbody += `Lv <input type="number" min="0" max="20" value="${cellData.level || 0}" 
-                              data-planet="${planetId}" data-pos="${pos}" 
-                              style="width:50px; font-size:11px; text-align:center; padding:4px;" />`;
+                    tbody += `</select>`;
 
                     tbody += `</td>`;
 
                     // Calculate bonuses
-                    if (cellData.techId && cellData.level > 0) {
-                        const bonus = this.calculateTechBonus(cellData.techId, cellData.level);
+                    if (cellData.techId && actualLevel > 0) {
+                        const bonus = this.calculateTechBonus(cellData.techId, actualLevel);
                         planetMetal += bonus.metal || 0;
                         planetCrystal += bonus.crystal || 0;
                         planetDeut += bonus.deut || 0;
@@ -1435,258 +1700,49 @@
                 grandTotalDeut += planetDeut;
             });
 
-            // Grand Total Row
-            tbody += `<tr style="background:#2a3a4e; font-weight:bold;">`;
-            tbody += `<td style="border:1px solid #444; padding:5px;" colspan="${positions.length + 1}">GRAND TOTAL</td>`;
-            tbody += `<td id="grand-total-metal" style="border:1px solid #444; padding:5px; text-align:center;">${grandTotalMetal.toFixed(2)}</td>`;
-            tbody += `<td id="grand-total-crystal" style="border:1px solid #444; padding:5px; text-align:center;">${grandTotalCrystal.toFixed(2)}</td>`;
-            tbody += `<td id="grand-total-deut" style="border:1px solid #444; padding:5px; text-align:center;">${grandTotalDeut.toFixed(2)}</td>`;
+            // Grand Total Bonus Summary Row
+            tbody += `<tr style="background:#2a3a4e; font-weight:bold; border-top:2px solid #555;">`;
+            tbody += `<td style="border:1px solid #444; padding:10px; text-align:right;" colspan="${positions.length + 1}">GLOBAL TOTAL BONUSES:</td>`;
+            tbody += `<td style="border:1px solid #444; padding:10px; text-align:center; color:#2ecc71;">+${grandTotalMetal.toFixed(2)}%</td>`;
+            tbody += `<td style="border:1px solid #444; padding:10px; text-align:center; color:#4a9eff;">+${grandTotalCrystal.toFixed(2)}%</td>`;
+            tbody += `<td style="border:1px solid #444; padding:10px; text-align:center; color:#f1c40f;">+${grandTotalDeut.toFixed(2)}%</td>`;
             tbody += `</tr>`;
-            tbody += '</tbody>';
 
+            tbody += '</tbody>';
             table.innerHTML = thead + tbody;
             container.appendChild(table);
 
-            // Add event listeners for real-time bonus updates
-            this.attachLFTechEventListeners();
+            // Add Event Listeners
+            container.querySelectorAll('.lf-tech-select').forEach(select => {
+                select.addEventListener('change', (e) => {
+                    const planetId = e.target.dataset.planet;
+                    const pos = e.target.dataset.pos;
+                    const techId = e.target.value;
 
-            // Save button handler
-            document.getElementById('lftech-save-btn').addEventListener('click', () => {
-                this.saveLFTechData();
-            });
-        }
+                    const selections = this.loadLFTechData();
+                    if (!selections[planetId]) selections[planetId] = {};
+                    selections[planetId][`pos${pos}`] = { techId: techId }; // Level is read from API
+                    this.saveLFTechData(selections);
 
-        getTechsForPosition(pos) {
-            const techMap = {
-                1: [{ id: 13201, shortName: 'Catalyzer' }],
-                2: [
-                    { id: 12212, shortName: 'HP Extract' },
-                    { id: 14202, shortName: 'Sulfide' },
-                    { id: 12202, shortName: 'Acoustic' }
-                ],
-                3: [{ id: 12203, shortName: 'HE Pump' }],
-                5: [{ id: 12205, shortName: 'Magma Prod' }],
-                6: [{ id: 13206, shortName: 'Auto Trans' }],
-                7: [{ id: 12207, shortName: 'Depth Snd' }],
-                8: [{ id: 11208, shortName: 'Enh Prod' }],
-                10: [{ id: 12210, shortName: 'Diamond' }],
-                11: [{ id: 12211, shortName: 'Seismic' }],
-                12: [
-                    { id: 12212, shortName: 'Magma Pump' },
-                    { id: 14212, shortName: 'Psycho' }
-                ],
-                13: [{ id: 13213, shortName: 'AI Swarm' }]
-            };
-            return techMap[pos] || [];
-        }
-
-        getTechColor(techId, position) {
-            // Map tech IDs to lifeform colors
-            // Special case: ID 12212 at position 2 is Human, at position 12 is Rock'tal
-            if (!techId) return '#888';
-
-            if (techId === 12212 && position === 2) {
-                return '#6bde6b'; // Human - Green (High-Performance Extractors)
-            }
-
-            const techIdStr = techId.toString();
-            if (techIdStr.startsWith('11')) return '#6bde6b'; // Human - Green
-            if (techIdStr.startsWith('12')) return '#ff9f4a'; // Rocktal - Orange
-            if (techIdStr.startsWith('13')) return '#6fb1fc'; // Mecha - Blue
-            if (techIdStr.startsWith('14')) return '#b57edc'; // Kaelesh - Purple
-
-            return '#888'; // Default gray
-        }
-
-        getTechInfo(techId, position) {
-            // Return race name and tech name for display
-            if (!techId) return null;
-
-            // Check if we have this tech in our map
-            const techData = LF_TECH_MAP[techId];
-            if (techData) {
-                // For tech ID 12212, check position to determine which tech it is
-                if (techId === 12212) {
-                    if (position === 2) {
-                        return { race: 'Human', name: 'High-Performance Extractors' };
-                    } else if (position === 12) {
-                        return { race: "Rock'tal", name: 'Magma-Powered Pump Systems' };
-                    }
-                }
-                return { race: techData.race, name: techData.name };
-            }
-
-            // Fallback for unmapped techs
-            return { race: 'Unknown', name: 'Unknown Tech' };
-        }
-
-        calculateTechBonus(techId, level) {
-            // Bonus mapping based on param_config.json (bonus1BaseValue * level)
-            const techBonuses = {
-                12212: { metal: 0.06, crystal: 0.06, deut: 0.06 },  // High-Performance Extractors
-                14202: { deut: 0.08 },   // Sulfide Process 
-                12202: { crystal: 0.08 },  // Acoustic Scanning
-                12203: { deut: 0.08 },   // High Energy Pump
-                12205: { metal: 0.08, crystal: 0.08, deut: 0.08 },  // Magma-Powered Production
-                13201: { deut: 0.08 },  // Catalyzer Technology
-                13206: { metal: 0.06, crystal: 0.06, deut: 0.06 },// Automated Transport
-                11208: { metal: 0.06, crystal: 0.06, deut: 0.06 },  // Enhanced Production
-                14212: { metal: 0.06, crystal: 0.06, deut: 0.06 },// Psychoharmoniser
-                12207: { metal: 0.08 },  // Depth Sounding
-                12210: { metal: 0.08 },  // Diamond Drill Heads
-                12211: { crystal: 0.08 },  // Seismic Mining
-                13213: { metal: 0.06, crystal: 0.06, deut: 0.06 } // AI Swarm
-            };
-
-            const bonus = techBonuses[techId] || {};
-            return {
-                metal: (bonus.metal || 0) * level,
-                crystal: (bonus.crystal || 0) * level,
-                deut: (bonus.deut || 0) * level
-            };
-        }
-
-        attachLFTechEventListeners() {
-            const table = document.getElementById('lftech-table');
-            if (!table) return;
-
-            // Listen for changes to recalculate bonuses AND update images
-            table.addEventListener('change', (e) => {
-                if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') {
-                    this.recalculateLFTechBonuses();
-
-                    // If it's a select dropdown, update the image
-                    if (e.target.tagName === 'SELECT' && e.target.classList.contains('lf-tech-select')) {
-                        this.updateTechImage(e.target);
-                    }
-                }
-            });
-        }
-
-        updateTechImage(selectElement) {
-            const techId = selectElement.value;
-            const pos = selectElement.getAttribute('data-pos'); // Get position
-            const cell = selectElement.closest('td');
-            if (!cell) return;
-
-            // Find or create the display container
-            let displayContainer = cell.querySelector('.tech-image-container');
-
-            if (techId) {
-                const techColor = this.getTechColor(parseInt(techId), parseInt(pos)); // Pass position
-                const techInfo = this.getTechInfo(parseInt(techId), parseInt(pos)); // Pass position
-
-                if (!displayContainer) {
-                    // Create new display container before the select dropdown
-                    displayContainer = document.createElement('div');
-                    displayContainer.className = 'tech-image-container';
-                    cell.insertBefore(displayContainer, cell.firstChild);
-                }
-
-                // Update the display container with race and tech name
-                if (techInfo) {
-                    displayContainer.style.cssText = `margin:0 auto 8px; padding:6px; border-radius:6px; background:${techColor}; box-shadow:0 2px 4px rgba(0,0,0,0.3);`;
-                    displayContainer.innerHTML = `
-                        <div style="font-size:9px; font-weight:bold; color:#fff; text-transform:uppercase; margin-bottom:2px;">${techInfo.race}</div>
-                        <div style="font-size:10px; color:#fff;">${techInfo.name}</div>
-                    `;
-                }
-            } else {
-                // No tech selected - show placeholder
-                if (!displayContainer) {
-                    displayContainer = document.createElement('div');
-                    displayContainer.className = 'tech-image-container';
-                    cell.insertBefore(displayContainer, cell.firstChild);
-                }
-                displayContainer.style.cssText = 'height:45px; margin:0 auto 8px; border:2px dashed #444; border-radius:8px; background:#1a1a2e; display:flex; align-items:center; justify-content:center; color:#666; font-size:9px;';
-                displayContainer.innerHTML = 'No Tech';
-            }
-        }
-
-        recalculateLFTechBonuses() {
-            const table = document.getElementById('lftech-table');
-            if (!table) return;
-
-            let grandMetal = 0, grandCrystal = 0, grandDeut = 0;
-
-            table.querySelectorAll('tbody tr[data-planet-id]').forEach(row => {
-                let planetMetal = 0, planetCrystal = 0, planetDeut = 0;
-
-                row.querySelectorAll('select').forEach(select => {
-                    const pos = select.getAttribute('data-pos');
-                    const techId = parseInt(select.value) || null;
-                    const levelInput = row.querySelector(`input[data-pos="${pos}"]`);
-                    const level = parseInt(levelInput?.value) || 0;
-
-                    if (techId && level > 0) {
-                        const bonus = this.calculateTechBonus(techId, level);
-                        planetMetal += bonus.metal || 0;
-                        planetCrystal += bonus.crystal || 0;
-                        planetDeut += bonus.deut || 0;
-                    }
-                });
-
-                row.querySelector('.bonus-metal').textContent = planetMetal.toFixed(2);
-                row.querySelector('.bonus-crystal').textContent = planetCrystal.toFixed(2);
-                row.querySelector('.bonus-deut').textContent = planetDeut.toFixed(2);
-
-                grandMetal += planetMetal;
-                grandCrystal += planetCrystal;
-                grandDeut += planetDeut;
-            });
-
-            document.getElementById('grand-total-metal').textContent = grandMetal.toFixed(2);
-            document.getElementById('grand-total-crystal').textContent = grandCrystal.toFixed(2);
-            document.getElementById('grand-total-deut').textContent = grandDeut.toFixed(2);
-        }
-
-        loadLFTechData() {
-            const storageKey = 'roiAdvisor_lfTechs';
-            const stored = localStorage.getItem(storageKey);
-            if (stored) {
-                try {
-                    const data = JSON.parse(stored);
-                    const statusEl = document.getElementById('lftech-save-status');
-                    if (statusEl && data.__timestamp) {
-                        statusEl.textContent = `Last saved: ${new Date(data.__timestamp).toLocaleString()}`;
-                    }
-                    return data;
-                } catch (e) {
-                    console.error('Failed to load LF tech data:', e);
-                }
-            }
-            return {};
-        }
-
-        saveLFTechData() {
-            const table = document.getElementById('lftech-table');
-            if (!table) return;
-
-            const data = { __timestamp: Date.now() };
-
-            table.querySelectorAll('tbody tr[data-planet-id]').forEach(row => {
-                const planetId = row.getAttribute('data-planet-id');
-                data[planetId] = {};
-
-                row.querySelectorAll('select').forEach(select => {
-                    const pos = select.getAttribute('data-pos');
-                    const techId = parseInt(select.value) || null;
-                    const levelInput = row.querySelector(`input[data-pos="${pos}"]`);
-                    const level = parseInt(levelInput?.value) || 0;
-
-                    data[planetId][`pos${pos}`] = { techId, level };
+                    // Re-render tab
+                    container.innerHTML = '';
+                    this.renderLFTechsTab(container);
                 });
             });
 
-            localStorage.setItem('roiAdvisor_lfTechs', JSON.stringify(data));
-
-            const statusEl = document.getElementById('lftech-save-status');
-            if (statusEl) {
-                statusEl.textContent = `Last saved: ${new Date().toLocaleString()}`;
-                statusEl.style.color = '#4a9eff';
-                setTimeout(() => { statusEl.style.color = '#888'; }, 2000);
+            // Save button status logic
+            const saveBtn = document.getElementById('lftech-save-btn');
+            if (saveBtn) {
+                saveBtn.addEventListener('click', () => {
+                    const status = document.getElementById('lftech-save-status');
+                    if (status) {
+                        status.textContent = 'Saved!';
+                        setTimeout(() => status.textContent = '', 2000);
+                    }
+                });
             }
         }
+
     }
 
     // --- Calculator ---
@@ -1697,28 +1753,26 @@
         }
 
         // --- Production Formulas ---
-        getMetalProd(level, plasmaLevel, geolog, items, classBonus, lfBonus) {
-            // Base * Level * 1.1^Level
-            // Plasma: 1% per level (0.01 * level * baseProd) or (1 + 0.01*level) * baseProd? 
-            // Standard: BaseProd * (1 + Plasma + Geo + Items + Class + LF)
-            const base = 30 * level * Math.pow(1.1, level);
-            const plasma = level > 0 ? (plasmaLevel * 0.01) : 0; // 1% per plasma level for Metal
-            return base * (1 + plasma + (lfBonus || 0)) * this.serverSpeed;
+        getMetalProd(level, plasmaLevel, geolog, items, lfBonus) {
+            let base = 30 * level * Math.pow(1.1, level);
+            const classBonus = getPlayerClass() === 'collector' ? 0.25 : 0;
+            const plasma = level > 0 ? (plasmaLevel * 0.01) : 0;
+            return base * (1 + plasma + classBonus + (lfBonus || 0)) * this.serverSpeed;
         }
 
         getCrystalProd(level, plasmaLevel, lfBonus) {
-            const base = 20 * level * Math.pow(1.1, level);
-            const plasma = level > 0 ? (plasmaLevel * 0.0066) : 0; // 0.66% per plasma level
-            return base * (1 + plasma + (lfBonus || 0)) * this.serverSpeed;
+            let base = 20 * level * Math.pow(1.1, level);
+            const classBonus = getPlayerClass() === 'collector' ? 0.25 : 0;
+            const plasma = level > 0 ? (plasmaLevel * 0.0066) : 0;
+            return base * (1 + plasma + classBonus + (lfBonus || 0)) * this.serverSpeed;
         }
 
         getDeutProd(level, avgTemp, plasmaLevel, lfBonus) {
-            // 10 * level * 1.1^level * (1.44 - 0.004 * avgTemp)
-            const base = 10 * level * Math.pow(1.1, level) * (1.44 - 0.004 * avgTemp);
-            // Plasma: 0.33% per level? (Actually OGame added Plasma for Deut recently? Need to verify. Assume 0 or user config). 
-            // EDIT: Plasma does boost Deut now in many universes. 0.33%.
+            // 10 * level * 1.1^level * (1.36 - 0.004 * avgTemp)
+            let base = 10 * level * Math.pow(1.1, level) * (1.36 - 0.004 * avgTemp);
+            const classBonus = getPlayerClass() === 'collector' ? 0.25 : 0;
             const plasma = level > 0 ? (plasmaLevel * 0.0033) : 0;
-            return base * (1 + plasma + (lfBonus || 0)) * this.serverSpeed;
+            return base * (1 + plasma + classBonus + (lfBonus || 0)) * this.serverSpeed;
         }
 
         // --- Cost Formulas ---
@@ -1759,8 +1813,8 @@
 
             if (type === 1) {
                 cost = this.getMetalCost(nextLevel);
-                const currentProd = this.getMetalProd(currentLevel, plasmaLevel, 0, 0, 0, lfBonus);
-                const nextProd = this.getMetalProd(nextLevel, plasmaLevel, 0, 0, 0, lfBonus);
+                const currentProd = this.getMetalProd(currentLevel, plasmaLevel, 0, 0, lfBonus);
+                const nextProd = this.getMetalProd(nextLevel, plasmaLevel, 0, 0, lfBonus);
                 prodDiff = nextProd - currentProd; // Hourly production gain
             } else if (type === 2) {
                 cost = this.getCrystalCost(nextLevel);
@@ -1805,13 +1859,21 @@
         }
 
         init() {
-            console.log('ROI Advisor: Initializing...');
+            console.log('OptiMine: Initializing...');
             this.uiManager.createButton();
         }
     }
 
-    // Singleton Start
-    const app = new ROIAdvisor();
-    app.init();
+    // Start when menu is ready
+    function start() {
+        const menu = document.querySelector('#menuTable');
+        if (menu) {
+            const app = new ROIAdvisor();
+            app.init();
+        } else {
+            setTimeout(start, 500);
+        }
+    }
 
+    start();
 })();

@@ -1,8 +1,9 @@
 # Ignore everything
 *
 
-# Except roi_advisor.user.js
-!roi_advisor.user.js
+# Except src directory and the script
+!src/
+!src/roi_advisor.user.js
 
 # Keep README and .gitignore itself
 !README.md
