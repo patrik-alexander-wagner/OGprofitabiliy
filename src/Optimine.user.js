@@ -446,7 +446,7 @@
                 borderBottom: '1px solid #333'
             });
 
-            const tabs = ['OptiMine', 'Mines', 'Research', 'LF Buildings', 'LF Techs'];
+            const tabs = ['OptiMine', 'Mines', 'Research', 'LF Buildings', 'LF Techs', 'About'];
             const contentContainer = document.createElement('div');
             Object.assign(contentContainer.style, {
                 flex: '1',
@@ -548,7 +548,45 @@
                 case 2: this.renderResearchTab(container); break;
                 case 3: this.renderLFBuildingsTab(container); break;
                 case 4: this.renderLFTechsTab(container); break;
+                case 5: this.renderAboutTab(container); break;
             }
+        }
+
+        renderAboutTab(container) {
+            const helpContent = document.createElement('div');
+            helpContent.style.cssText = 'padding:10px; line-height:1.6; font-size:12px; color:#e2e8f0;';
+            helpContent.innerHTML = `
+                <h2 style="color:#4a9eff; border-bottom:1px solid #333; padding-bottom:10px; margin-bottom:15px;">About OptiMine</h2>
+                
+                <h3 style="color:#6fb1fc; margin-top:20px;">OptiMine Tab</h3>
+                <p>Displays the Return on Investment (ROI) in days and weeks for Buildings, Lifeform (LF) Buildings, and LF Technologies that directly impact mine production.</p>
+                <p><strong>ROI Calculation:</strong> <code>Cost (MSU) / Δ Daily Production (MSU)</code></p>
+                
+                <h4 style="margin-top:15px; color:#a0aec0;">How Returns are Computed:</h4>
+                <ul style="padding-left:20px;">
+                    <li><strong>Mines:</strong> The return is the difference in base production plus all bonuses (Research, LF Buildings, LF Techs) that apply on top.
+                        <br><i style="font-size:11px; color:#888;">Example: If base goes from 100 to 110, but a 50% bonus exists, the total increase is 15 MSU (not 10).</i>
+                    </li>
+                    <li><strong>LF Buildings:</strong> The return is the percentage upgrade applied directly to the base production of the specific planet where the building is located.
+                        <br><i style="font-size:11px; color:#888;">Example: A building adding 2% to a base of 100 yields 2 MSU in production.</i>
+                    </li>
+                    <li><strong>LF Technologies:</strong> The return is the percentage increase applied to the base values of <strong>all planets</strong> in your empire.
+                        <br><i style="font-size:11px; color:#888;">Example: A 0.08% increase across 10 planets each producing 100 yields a total of 8 MSU.</i>
+                    </li>
+                </ul>
+
+                <h3 style="color:#6fb1fc; margin-top:25px;">Other Tabs</h3>
+                <ul style="padding-left:20px;">
+                    <li><strong>Mines Tab:</strong> Displays all mine levels, base production, and the total bonuses applied.</li>
+                    <li><strong>Lifeform Building Tab:</strong> Displays active lifeform buildings per planet and their current levels.</li>
+                    <li><strong>LF Tech Tab:</strong> Due to script limitations in automatically detecting which of the 4 techs is active at each slot, <strong>manual selection is required for a one-time setup</strong>. After selecting the active tech for each planet and clicking "Save", the script will dynamically track levels and ROI.</li>
+                </ul>
+
+                <div style="margin-top:25px; padding:10px; background:#2d3748; border-radius:5px; font-style:italic; border-left:4px solid #4a9eff;">
+                    "I apologize for the inconvenience regarding the manual LF Tech setup." - Bel Veste
+                </div>
+            `;
+            container.appendChild(helpContent);
         }
 
         renderROIAdvisorTab(container) {
