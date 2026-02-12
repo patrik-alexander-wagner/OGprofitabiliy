@@ -1,14 +1,14 @@
 // ==UserScript==
 // @name        OG_Optimine
-// @namespace    https://github.com/patrik-alexander-wagner/OGprofitability
+// @namespace    https://github.com/patrik-alexander-wagner/OG_OptiMine
 // @version      1.0.0
 // @description  ROI recommendations for buildings/tech/LF
 // @author       Bel'Veste
 // @match        https://*.ogame.gameforge.com/*
 // @grant        none
-// @updateURL    https://raw.githubusercontent.com/patrik-alexander-wagner/OGprofitability/main/src/Optimine.user.js
-// @downloadURL  https://raw.githubusercontent.com/patrik-alexander-wagner/OGprofitability/main/src/Optimine.user.js
-// @homepageURL  https://github.com/patrik-alexander-wagner/OGprofitability
+// @updateURL    https://raw.githubusercontent.com/patrik-alexander-wagner/OG_OptiMine/main/src/Optimine.user.js
+// @downloadURL  https://raw.githubusercontent.com/patrik-alexander-wagner/OG_OptiMine/main/src/Optimine.user.js
+// @homepageURL  https://github.com/patrik-alexander-wagner/OG_OptiMine
 // ==/UserScript==
 
 (function () {
